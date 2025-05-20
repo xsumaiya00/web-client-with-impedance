@@ -1,5 +1,6 @@
 import React from 'react';
-import UUIDScanner from '../UUIDScanner';
+import UUIDScanner from '../UUIDScanner'; // ✅ correct path
+
 
 const UUIDScannerPage: React.FC = () => {
   return (
