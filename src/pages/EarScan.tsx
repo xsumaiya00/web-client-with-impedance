@@ -7,7 +7,8 @@ const EarScan: React.FC = () => {
   const [isReady, setIsReady] = useState(false);
   const [duration, setDuration] = useState("30s");
 
-  // Enable recording if impedance < 200
+  const BACKEND_BASE_URL = "https://impedance-backend.onrender.com";
+
   useEffect(() => {
     if (impedance !== null && impedance < 200) {
       setIsReady(true);
@@ -25,8 +26,6 @@ const EarScan: React.FC = () => {
 
       const server = await device.gatt?.connect();
       setConnected(true);
-
-      // ✅ Start real impedance stream from backend
       startImpedanceStream();
     } catch (err) {
       console.error("Connection failed:", err);
@@ -34,12 +33,11 @@ const EarScan: React.FC = () => {
   };
 
   const startImpedanceStream = () => {
-    const source = new EventSource("http://localhost:8000/stream-impedance");
-
+    const source = new EventSource(`${BACKEND_BASE_URL}/stream-impedance`);
     source.onmessage = (event) => {
       try {
         const parsed = JSON.parse(event.data);
-        const value = parsed.impedance?.value || parsed.impedance; // Adjust as needed
+        const value = parsed.impedance?.value || parsed.impedance;
         if (typeof value === "number") {
           setImpedance(value);
         }
@@ -59,12 +57,36 @@ const EarScan: React.FC = () => {
     setRecording(true);
 
     try {
-      const res = await fetch("http://localhost:8000/start-eeg-stream");
+      const res = await fetch(`${BACKEND_BASE_URL}/start-eeg-stream`);
       const data = await res.json();
       console.log("🎬 EEG Recording:", data);
-      alert(data.status);
+      alert(data.status || "Recording started");
     } catch (err) {
       console.error("Failed to start EEG stream:", err);
+      alert("Failed to start EEG stream");
+    }
+  };
+
+  const stopAndSaveEEG = async () => {
+    try {
+      const response = await fetch(`${BACKEND_BASE_URL}/stop-and-save-eeg`);
+      if (!response.ok) throw new Error("Request failed");
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "eeg_data.csv";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      setRecording(false);
+    } catch (err) {
+      console.error("Download failed:", err);
+      alert("Failed to download EEG data");
     }
   };
 
@@ -73,23 +95,39 @@ const EarScan: React.FC = () => {
       <h2>Ear Signals</h2>
       <p>Scan your brain waves with Ear device</p>
 
-      <p>Status: {connected ? "Connected ✅" : "Disconnected ❌"}</p>
-      <button onClick={connectToDevice} style={{ backgroundColor: "green", color: "white" }}>
+      <h3>Bluetooth Status</h3>
+      <p>
+        Status:{" "}
+        <span style={{ color: connected ? "green" : "red" }}>
+          {connected ? "Connected ✅" : "Disconnected ❌"}
+        </span>
+      </p>
+
+      <button
+        onClick={connectToDevice}
+        style={{
+          backgroundColor: "green",
+          color: "white",
+          padding: "8px 12px",
+          borderRadius: "6px",
+          marginBottom: "10px"
+        }}
+      >
         {connected ? "Reconnect" : "Connect"}
       </button>
 
       {impedance !== null && (
-        <p style={{ color: impedance < 200 ? "green" : "red" }}>
-          Impedance: <strong>{impedance} kΩ</strong>
+        <p style={{ marginTop: "1rem", color: impedance < 200 ? "green" : "red" }}>
+          Impedance: <strong>{impedance.toFixed(2)} kΩ</strong>
         </p>
       )}
 
       <div style={{ marginTop: "1rem" }}>
-        <label>Duration: </label>
+        <label>Duration (e.g., 30s or 1m): </label>
         <input
           value={duration}
           onChange={(e) => setDuration(e.target.value)}
-          style={{ padding: "4px", width: "80px" }}
+          style={{ padding: "4px", width: "80px", marginLeft: "8px" }}
         />
       </div>
 
@@ -105,6 +143,20 @@ const EarScan: React.FC = () => {
         }}
       >
         Start Recording
+      </button>
+
+      <button
+        onClick={stopAndSaveEEG}
+        style={{
+          marginTop: "1rem",
+          marginLeft: "10px",
+          backgroundColor: "#e63946",
+          color: "white",
+          padding: "10px 16px",
+          borderRadius: "8px"
+        }}
+      >
+        Stop & Download EEG
       </button>
     </div>
   );
