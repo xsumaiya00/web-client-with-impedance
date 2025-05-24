@@ -1,119 +1,111 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 
 const EarScan: React.FC = () => {
-  const [impedance, setImpedance] = useState<number | null>(null);
   const [connected, setConnected] = useState(false);
+  const [impedance, setImpedance] = useState<number | null>(null);
   const [recording, setRecording] = useState(false);
-  const [isReady, setIsReady] = useState(false);
   const [duration, setDuration] = useState("30s");
+  const [eegData, setEegData] = useState<string[][]>([]);
 
-  const BACKEND_BASE_URL = "https://impedance-backend.onrender.com";
+  let eegListener: ((event: Event) => void) | null = null;
 
-  useEffect(() => {
-    if (impedance !== null && impedance < 200) {
-      setIsReady(true);
-    } else {
-      setIsReady(false);
+  const SERVICE_UUID = '0000180f-0000-1000-8000-00805f9b34fb';
+const CHARACTERISTIC_UUID = '00002a19-0000-1000-8000-00805f9b34fb';
+
+const connectToDevice = async () => {
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "IGEB" }],
+      optionalServices: [SERVICE_UUID],
+    });
+
+    const server = await device.gatt?.connect();
+    const service = await server?.getPrimaryService(SERVICE_UUID);
+    const impedanceChar = await service?.getCharacteristic(CHARACTERISTIC_UUID);
+
+    if (!impedanceChar) {
+      alert("Could not find impedance characteristic.");
+      return;
     }
-  }, [impedance]);
 
-  const connectToDevice = async () => {
-    try {
-      const device = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: "IGEB" }],
-        optionalServices: ["battery_service"]
-      });
+    await impedanceChar.startNotifications();
+    impedanceChar.addEventListener("characteristicvaluechanged", (event: any) => {
+      const value = event.target.value.getUint8(0); // Adjust based on actual byte structure
+      setImpedance(value);
+    });
 
-      const server = await device.gatt?.connect();
-      setConnected(true);
-      startImpedanceStream();
-    } catch (err) {
-      console.error("Connection failed:", err);
-    }
-  };
+    setConnected(true);
+  } catch (error) {
+    alert("Connection failed: " + error);
+  }
+};
 
-  const startImpedanceStream = () => {
-    const source = new EventSource(`${BACKEND_BASE_URL}/stream-impedance`);
-    source.onmessage = (event) => {
-      try {
-        const parsed = JSON.parse(event.data);
-        const value = parsed.impedance?.value || parsed.impedance;
-        if (typeof value === "number") {
-          setImpedance(value);
-        }
-      } catch (err) {
-        console.error("Invalid impedance data:", err);
-      }
-    };
 
-    source.onerror = (err) => {
-      console.error("Impedance stream error:", err);
-      source.close();
-    };
+  const parseDuration = (str: string) => {
+    if (str.endsWith("s")) return parseInt(str) * 1000;
+    if (str.endsWith("m")) return parseInt(str) * 60 * 1000;
+    return 30000;
   };
 
   const startRecording = async () => {
-    if (!isReady) return;
     setRecording(true);
+    setEegData([]);
 
-    try {
-      const res = await fetch(`${BACKEND_BASE_URL}/start-eeg-stream`);
-      const data = await res.json();
-      console.log("🎬 EEG Recording:", data);
-      alert(data.status || "Recording started");
-    } catch (err) {
-      console.error("Failed to start EEG stream:", err);
-      alert("Failed to start EEG stream");
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "IGEB" }],
+      optionalServices: ["device_information"],
+    });
+
+    const server = await device.gatt?.connect();
+    const service = await server?.getPrimaryService("device_information");
+    const eegChar = await service?.getCharacteristic("manufacturer_name_string");
+
+    if (!eegChar) {
+      alert("EEG characteristic not found.");
+      return;
     }
+
+    await eegChar.startNotifications();
+    eegListener = (event: any) => {
+      const value = event.target.value.getUint8(0); // Simulated EEG value
+      const timestamp = new Date().toISOString();
+      setEegData((prev) => [...prev, [timestamp, value.toString()]]);
+    };
+
+    eegChar.addEventListener("characteristicvaluechanged", eegListener);
+
+    setTimeout(() => stopAndSaveEEG(eegChar), parseDuration(duration));
   };
 
-  const stopAndSaveEEG = async () => {
-    try {
-      const response = await fetch(`${BACKEND_BASE_URL}/stop-and-save-eeg`);
-      if (!response.ok) throw new Error("Request failed");
+  const stopAndSaveEEG = async (eegChar: BluetoothRemoteGATTCharacteristic | null) => {
+    setRecording(false);
+    if (!eegData.length) return;
 
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "eeg_data.csv";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-
-      setRecording(false);
-    } catch (err) {
-      console.error("Download failed:", err);
-      alert("Failed to download EEG data");
+    if (eegChar && eegListener) {
+      eegChar.removeEventListener("characteristicvaluechanged", eegListener);
     }
+
+    const header = ["Timestamp", "EEG Value"];
+    const rows = [header, ...eegData];
+    const csv = rows.map((r) => r.join(",")).join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "eeg_data.csv";
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="earscan" style={{ padding: "2rem", textAlign: "center" }}>
-      <h2>Ear Signals</h2>
-      <p>Scan your brain waves with Ear device</p>
-
-      <h3>Bluetooth Status</h3>
-      <p>
-        Status:{" "}
-        <span style={{ color: connected ? "green" : "red" }}>
-          {connected ? "Connected ✅" : "Disconnected ❌"}
-        </span>
-      </p>
-
+    <div style={{ padding: "2rem", textAlign: "center" }}>
+      <h2>Ear EEG Scanner</h2>
       <button
         onClick={connectToDevice}
-        style={{
-          backgroundColor: "green",
-          color: "white",
-          padding: "8px 12px",
-          borderRadius: "6px",
-          marginBottom: "10px"
-        }}
+        style={{ background: "green", color: "white", padding: "10px" }}
       >
-        {connected ? "Reconnect" : "Connect"}
+        {connected ? "Reconnect" : "Connect to Device"}
       </button>
 
       {impedance !== null && (
@@ -123,40 +115,26 @@ const EarScan: React.FC = () => {
       )}
 
       <div style={{ marginTop: "1rem" }}>
-        <label>Duration (e.g., 30s or 1m): </label>
+        <label>Recording Duration: </label>
         <input
           value={duration}
           onChange={(e) => setDuration(e.target.value)}
-          style={{ padding: "4px", width: "80px", marginLeft: "8px" }}
+          placeholder="30s or 1m"
+          style={{ padding: "4px", width: "100px", marginLeft: "8px" }}
         />
       </div>
 
       <button
         onClick={startRecording}
-        disabled={!isReady}
+        disabled={!connected || (impedance !== null && impedance > 200)}
         style={{
-          marginTop: "1rem",
-          backgroundColor: isReady ? "blue" : "gray",
+          backgroundColor: "blue",
           color: "white",
-          padding: "10px 16px",
-          borderRadius: "8px"
+          marginTop: "10px",
+          padding: "10px",
         }}
       >
-        Start Recording
-      </button>
-
-      <button
-        onClick={stopAndSaveEEG}
-        style={{
-          marginTop: "1rem",
-          marginLeft: "10px",
-          backgroundColor: "#e63946",
-          color: "white",
-          padding: "10px 16px",
-          borderRadius: "8px"
-        }}
-      >
-        Stop & Download EEG
+        Start EEG Recording
       </button>
     </div>
   );
