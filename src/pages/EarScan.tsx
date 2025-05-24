@@ -1,111 +1,87 @@
-import React, { useState } from "react";
+// EarScan.tsx
+import React, { useEffect, useState, useRef } from "react";
 
-const EarScan: React.FC = () => {
+const EEG_SERVICE = "0000180f-0000-1000-8000-00805f9b34fb";
+const EEG_CHAR = "00002a19-0000-1000-8000-00805f9b34fb"; // Same for impedance and EEG (assumed)
+
+const EarScan = () => {
   const [connected, setConnected] = useState(false);
   const [impedance, setImpedance] = useState<number | null>(null);
-  const [recording, setRecording] = useState(false);
   const [duration, setDuration] = useState("30s");
-  const [eegData, setEegData] = useState<string[][]>([]);
-  const [characteristic, setCharacteristic] = useState<BluetoothRemoteGATTCharacteristic | null>(null);
-  const [eegChar, setEegChar] = useState<BluetoothRemoteGATTCharacteristic | null>(null);
-
-  const SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb";
-  const IMPEDANCE_UUID = "00002a19-0000-1000-8000-00805f9b34fb";
-  const EEG_UUID = "00002a19-0000-1000-8000-00805f9b34fb"; // Use same unless IDUN provides different one
-
-  let eegListener: (event: Event) => void;
-
-  const parseDuration = (str: string) => {
-    if (str.endsWith("s")) return parseInt(str) * 1000;
-    if (str.endsWith("m")) return parseInt(str) * 60 * 1000;
-    return 30000;
-  };
+  const [isRecording, setIsRecording] = useState(false);
+  const [device, setDevice] = useState<BluetoothDevice | null>(null);
+  const eegData = useRef<{ timestamp: number; value: number }[]>([]);
+  const eegChar = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
 
   const connectToDevice = async () => {
     try {
-      const device = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: "IGEB" }],
-        optionalServices: [SERVICE_UUID],
+      const selectedDevice = await navigator.bluetooth.requestDevice({
+        filters: [{ services: [EEG_SERVICE] }],
+        optionalServices: [EEG_SERVICE],
       });
 
-      const server = await device.gatt?.connect();
-      const service = await server?.getPrimaryService(SERVICE_UUID);
+      const server = await selectedDevice.gatt!.connect();
+      const service = await server.getPrimaryService(EEG_SERVICE);
+      const char = await service.getCharacteristic(EEG_CHAR);
 
-      const impChar = await service?.getCharacteristic(IMPEDANCE_UUID);
-      const eegCharacteristic = await service?.getCharacteristic(EEG_UUID);
+      await char.startNotifications();
 
-      if (!impChar || !eegCharacteristic) {
-        alert("Unable to find required characteristics.");
-        return;
-      }
+      char.addEventListener("characteristicvaluechanged", handleImpedance);
 
-      // Start Impedance Notifications
-      await impChar.startNotifications();
-      impChar.addEventListener("characteristicvaluechanged", (event: any) => {
-        const value = event.target.value.getUint8(0);
-        setImpedance(value);
-      });
-
-      setCharacteristic(impChar);
-      setEegChar(eegCharacteristic);
+      eegChar.current = char;
+      setDevice(selectedDevice);
       setConnected(true);
-    } catch (err) {
-      alert("Connection failed: " + err);
+    } catch (error) {
+      console.error("Connection failed:", error);
     }
   };
 
-  const startRecording = async () => {
-    if (!eegChar) {
-      alert("EEG characteristic not available.");
-      return;
-    }
-
-    setRecording(true);
-    setEegData([]);
-
-    await eegChar.startNotifications();
-
-    eegListener = (event: any) => {
-      const value = event.target.value.getUint8(0);
-      const timestamp = new Date().toISOString();
-      setEegData((prev) => [...prev, [timestamp, value.toString()]]);
-    };
-
-    eegChar.addEventListener("characteristicvaluechanged", eegListener);
-
-    setTimeout(() => stopAndSaveEEG(), parseDuration(duration));
+  const handleImpedance = (event: Event) => {
+    const val = (event.target as BluetoothRemoteGATTCharacteristic).value;
+    if (!val) return;
+    const impedanceValue = val.getUint8(0); // Simplified; may vary by device
+    setImpedance(impedanceValue);
   };
 
-  const stopAndSaveEEG = async () => {
-    setRecording(false);
+  const startRecording = () => {
+    if (!eegChar.current) return;
+    eegData.current = [];
+    setIsRecording(true);
 
-    if (!eegData.length || !eegChar) return;
+    eegChar.current.addEventListener("characteristicvaluechanged", handleEEGData);
+  };
 
-    eegChar.removeEventListener("characteristicvaluechanged", eegListener);
+  const handleEEGData = (event: Event) => {
+    const val = (event.target as BluetoothRemoteGATTCharacteristic).value;
+    if (!val) return;
+    const eegVal = val.getUint8(0);
+    eegData.current.push({ timestamp: Date.now(), value: eegVal });
+  };
 
-    const header = ["Timestamp", "EEG Value"];
-    const csv = [header, ...eegData].map((r) => r.join(",")).join("\n");
+  const stopAndSaveEEG = () => {
+    if (!eegChar.current) return;
+    eegChar.current.removeEventListener("characteristicvaluechanged", handleEEGData);
+    setIsRecording(false);
 
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "eeg_data.csv";
-    a.click();
-    URL.revokeObjectURL(url);
+    const csvContent = "data:text/csv;charset=utf-8,Timestamp,Value\n" +
+      eegData.current.map(({ timestamp, value }) => `${timestamp},${value}`).join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `eeg_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
-    <div style={{ padding: "2rem", textAlign: "center" }}>
+    <div style={{ textAlign: "center", padding: "2rem" }}>
       <h2>Ear Signals</h2>
       <p>Scan your brain waves with Ear device</p>
-
       <h3>Bluetooth Status</h3>
-      <p>Status: <span style={{ color: connected ? "green" : "red" }}>
-        {connected ? "Connected ✅" : "Disconnected ❌"}
-      </span></p>
-
-      <button onClick={connectToDevice} style={{ backgroundColor: "green", color: "white", padding: "8px 12px", borderRadius: "6px" }}>
+      <p>Status: <span style={{ color: connected ? "green" : "red" }}>{connected ? "Connected ✅" : "Disconnected ❌"}</span></p>
+      <button onClick={connectToDevice} style={{ backgroundColor: "green", color: "white", padding: "8px 12px", borderRadius: "5px" }}>
         {connected ? "Reconnect" : "Connect"}
       </button>
 
@@ -124,30 +100,10 @@ const EarScan: React.FC = () => {
         />
       </div>
 
-      <button
-        onClick={startRecording}
-        disabled={!connected || (impedance !== null && impedance > 200)}
-        style={{
-          backgroundColor: "blue",
-          color: "white",
-          marginTop: "10px",
-          padding: "10px"
-        }}
-      >
-        Start Recording
-      </button>
-      <button
-        onClick={stopAndSaveEEG}
-        disabled={!recording}
-        style={{
-          backgroundColor: "crimson",
-          color: "white",
-          marginLeft: "10px",
-          padding: "10px"
-        }}
-      >
-        Stop & Download EEG
-      </button>
+      <div style={{ marginTop: "1rem" }}>
+        <button onClick={startRecording} disabled={!connected || isRecording} style={{ backgroundColor: "blue", color: "white", padding: "10px" }}>Start Recording</button>
+        <button onClick={stopAndSaveEEG} disabled={!isRecording} style={{ backgroundColor: "crimson", color: "white", padding: "10px", marginLeft: "1rem" }}>Stop & Download EEG</button>
+      </div>
     </div>
   );
 };
