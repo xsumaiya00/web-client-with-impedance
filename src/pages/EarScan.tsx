@@ -63,8 +63,9 @@ const EarScan = () => {
     eegChar.current.removeEventListener("characteristicvaluechanged", handleEEGData);
     setIsRecording(false);
 
-    const csvContent = "data:text/csv;charset=utf-8,Timestamp,Value\n" +
-      eegData.current.map(({ timestamp, value }) => `${timestamp},${value}`).join("\n");
+    const csvContent ="data:text/csv;charset=utf-8,Timestamp,EEG Value\n" +
+     eegData.current.map(({ timestamp, value }) => `${new Date(timestamp).toISOString()},${value}`).join("\n");
+
 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
@@ -86,9 +87,14 @@ const EarScan = () => {
       </button>
 
       {impedance !== null && (
-        <p style={{ marginTop: "1rem", color: impedance < 200 ? "green" : "red" }}>
-          Impedance: <strong>{impedance.toFixed(2)} kΩ</strong>
+        <p style={{ fontSize: "1.25rem", marginTop: "1rem" }}>
+         Impedance: <span style={{ color: impedance < 200 ? "green" : "red", fontWeight: "bold" }}>{impedance.toFixed(2)} kΩ</span>
+          <br />
+         Quality: <span style={{ color: impedance < 200 ? "green" : "red", fontWeight: "bold" }}>
+         {impedance < 100 ? "Excellent" : impedance < 200 ? "Good" : "Insufficient"}
+          </span>
         </p>
+
       )}
 
       <div style={{ marginTop: "1rem" }}>
