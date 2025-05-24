@@ -29,24 +29,29 @@ const EarScan = () => {
 
   const connectToDevice = async () => {
   try {
-    console.log("Looking for IGEB device...");
-    const device = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: "IGEB" }],
+    const selectedDevice = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
       optionalServices: [EEG_SERVICE],
     });
 
-    const server = await device.gatt?.connect();
+    if (!selectedDevice.name?.includes("IGEB")) {
+      alert("Selected device is not IGEB");
+      return;
+    }
+
+    const server = await selectedDevice.gatt!.connect();
     const service = await server.getPrimaryService(EEG_SERVICE);
     const char = await service.getCharacteristic(EEG_CHAR);
+    await char.startNotifications();
 
+    char.addEventListener("characteristicvaluechanged", handleImpedance);
     eegChar.current = char;
+    setDevice(selectedDevice);
     setConnected(true);
-    console.log("Connected to device:", device.name);
   } catch (error) {
-    console.error("Bluetooth connection failed:", error);
+    console.error("Connection failed:", error);
   }
 };
-
 
 
   const startRecording = () => {
