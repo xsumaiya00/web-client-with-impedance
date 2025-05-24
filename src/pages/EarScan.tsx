@@ -25,7 +25,6 @@ const EarScan = () => {
       const char = await service.getCharacteristic(EEG_CHAR);
 
       await char.startNotifications();
-
       char.addEventListener("characteristicvaluechanged", handleImpedance);
 
       eegChar.current = char;
@@ -39,7 +38,8 @@ const EarScan = () => {
   const handleImpedance = (event: Event) => {
     const val = (event.target as BluetoothRemoteGATTCharacteristic).value;
     if (!val) return;
-    const impedanceValue = val.getUint8(0); // Simplified; may vary by device
+    const impedanceValue = val.getUint16(0, true); // Updated to use Uint16
+    console.log("Received impedance:", impedanceValue);
     setImpedance(impedanceValue);
   };
 
@@ -47,7 +47,6 @@ const EarScan = () => {
     if (!eegChar.current) return;
     eegData.current = [];
     setIsRecording(true);
-
     eegChar.current.addEventListener("characteristicvaluechanged", handleEEGData);
   };
 
@@ -63,9 +62,8 @@ const EarScan = () => {
     eegChar.current.removeEventListener("characteristicvaluechanged", handleEEGData);
     setIsRecording(false);
 
-    const csvContent ="data:text/csv;charset=utf-8,Timestamp,EEG Value\n" +
-     eegData.current.map(({ timestamp, value }) => `${new Date(timestamp).toISOString()},${value}`).join("\n");
-
+    const csvContent = "data:text/csv;charset=utf-8,Timestamp,EEG Value\n" +
+      eegData.current.map(({ timestamp, value }) => `${new Date(timestamp).toISOString()},${value}`).join("\n");
 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
@@ -75,6 +73,21 @@ const EarScan = () => {
     link.click();
     document.body.removeChild(link);
   };
+
+  // Optional: Poll impedance every second if live updates don't work
+  useEffect(() => {
+    if (!connected || !eegChar.current) return;
+    const interval = setInterval(async () => {
+      try {
+        const val = await eegChar.current!.readValue();
+        const impedanceValue = val.getUint16(0, true);
+        setImpedance(impedanceValue);
+      } catch (err) {
+        console.warn("Failed to read impedance", err);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [connected]);
 
   return (
     <div style={{ textAlign: "center", padding: "2rem" }}>
@@ -87,14 +100,10 @@ const EarScan = () => {
       </button>
 
       {impedance !== null && (
-        <p style={{ fontSize: "1.25rem", marginTop: "1rem" }}>
-         Impedance: <span style={{ color: impedance < 200 ? "green" : "red", fontWeight: "bold" }}>{impedance.toFixed(2)} kΩ</span>
-          <br />
-         Quality: <span style={{ color: impedance < 200 ? "green" : "red", fontWeight: "bold" }}>
-         {impedance < 100 ? "Excellent" : impedance < 200 ? "Good" : "Insufficient"}
-          </span>
+        <p style={{ marginTop: "1rem", color: impedance < 200 ? "green" : "red" }}>
+          Impedance: <strong>{impedance.toFixed(2)} kΩ</strong><br />
+          Quality: <strong>{impedance < 100 ? "Excellent" : impedance < 200 ? "Good" : "Insufficient"}</strong>
         </p>
-
       )}
 
       <div style={{ marginTop: "1rem" }}>
