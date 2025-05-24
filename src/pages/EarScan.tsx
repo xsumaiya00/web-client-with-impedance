@@ -1,17 +1,32 @@
 // EarScan.tsx
 import React, { useEffect, useState, useRef } from "react";
+import { Line } from "react-chartjs-2";
+import {
+  Chart as ChartJS,
+  LineElement,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  Title,
+  Tooltip,
+  Legend,
+} from "chart.js";
+
+ChartJS.register(LineElement, CategoryScale, LinearScale, PointElement, Title, Tooltip, Legend);
 
 const EEG_SERVICE = "0000180f-0000-1000-8000-00805f9b34fb";
-const EEG_CHAR = "00002a19-0000-1000-8000-00805f9b34fb"; // Same for impedance and EEG (assumed)
+const EEG_CHAR = "00002a19-0000-1000-8000-00805f9b34fb"; // same for EEG & impedance assumed
 
 const EarScan = () => {
   const [connected, setConnected] = useState(false);
   const [impedance, setImpedance] = useState<number | null>(null);
+  const [impedanceData, setImpedanceData] = useState<number[]>([]);
   const [duration, setDuration] = useState("30s");
   const [isRecording, setIsRecording] = useState(false);
   const [device, setDevice] = useState<BluetoothDevice | null>(null);
   const eegData = useRef<{ timestamp: number; value: number }[]>([]);
   const eegChar = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
+  const pollInterval = useRef<NodeJS.Timeout | null>(null);
 
   const connectToDevice = async () => {
     try {
@@ -19,14 +34,12 @@ const EarScan = () => {
         filters: [{ services: [EEG_SERVICE] }],
         optionalServices: [EEG_SERVICE],
       });
-
       const server = await selectedDevice.gatt!.connect();
       const service = await server.getPrimaryService(EEG_SERVICE);
       const char = await service.getCharacteristic(EEG_CHAR);
-
       await char.startNotifications();
-      char.addEventListener("characteristicvaluechanged", handleImpedance);
 
+      char.addEventListener("characteristicvaluechanged", handleImpedance);
       eegChar.current = char;
       setDevice(selectedDevice);
       setConnected(true);
@@ -38,9 +51,9 @@ const EarScan = () => {
   const handleImpedance = (event: Event) => {
     const val = (event.target as BluetoothRemoteGATTCharacteristic).value;
     if (!val) return;
-    const impedanceValue = val.getUint16(0, true); // Updated to use Uint16
-    console.log("Received impedance:", impedanceValue);
+    const impedanceValue = val.getUint16(0, true);
     setImpedance(impedanceValue);
+    setImpedanceData((prev) => [...prev.slice(-50), impedanceValue]);
   };
 
   const startRecording = () => {
@@ -62,7 +75,7 @@ const EarScan = () => {
     eegChar.current.removeEventListener("characteristicvaluechanged", handleEEGData);
     setIsRecording(false);
 
-    const csvContent = "data:text/csv;charset=utf-8,Timestamp,EEG Value\n" +
+    const csvContent = "data:text/csv;charset=utf-8,Timestamp,Value\n" +
       eegData.current.map(({ timestamp, value }) => `${new Date(timestamp).toISOString()},${value}`).join("\n");
 
     const encodedUri = encodeURI(csvContent);
@@ -74,25 +87,50 @@ const EarScan = () => {
     document.body.removeChild(link);
   };
 
-  // Optional: Poll impedance every second if live updates don't work
+  const impedanceQuality = (value: number | null) => {
+    if (value === null) return "N/A";
+    if (value < 50) return "Excellent";
+    if (value < 200) return "Good";
+    return "Insufficient";
+  };
+
+  const impedanceChartData = {
+    labels: impedanceData.map((_, idx) => idx.toString()),
+    datasets: [
+      {
+        label: "Impedance (kΩ)",
+        data: impedanceData.map((val) => (val / 1000).toFixed(2)),
+        fill: false,
+        borderColor: "#4bc0c0",
+        tension: 0.3,
+      },
+    ],
+  };
+
   useEffect(() => {
-    if (!connected || !eegChar.current) return;
-    const interval = setInterval(async () => {
-      try {
-        const val = await eegChar.current!.readValue();
-        const impedanceValue = val.getUint16(0, true);
-        setImpedance(impedanceValue);
-      } catch (err) {
-        console.warn("Failed to read impedance", err);
-      }
-    }, 1000);
-    return () => clearInterval(interval);
+    // Optional polling fallback if notifications are unreliable
+    if (connected && eegChar.current && !pollInterval.current) {
+      pollInterval.current = setInterval(async () => {
+        try {
+          const val = await eegChar.current!.readValue();
+          const impedanceValue = val.getUint16(0, true);
+          setImpedance(impedanceValue);
+          setImpedanceData((prev) => [...prev.slice(-50), impedanceValue]);
+        } catch (e) {
+          console.warn("Polling impedance failed");
+        }
+      }, 1000);
+    }
+    return () => {
+      if (pollInterval.current) clearInterval(pollInterval.current);
+    };
   }, [connected]);
 
   return (
     <div style={{ textAlign: "center", padding: "2rem" }}>
       <h2>Ear Signals</h2>
       <p>Scan your brain waves with Ear device</p>
+
       <h3>Bluetooth Status</h3>
       <p>Status: <span style={{ color: connected ? "green" : "red" }}>{connected ? "Connected ✅" : "Disconnected ❌"}</span></p>
       <button onClick={connectToDevice} style={{ backgroundColor: "green", color: "white", padding: "8px 12px", borderRadius: "5px" }}>
@@ -100,10 +138,15 @@ const EarScan = () => {
       </button>
 
       {impedance !== null && (
-        <p style={{ marginTop: "1rem", color: impedance < 200 ? "green" : "red" }}>
-          Impedance: <strong>{impedance.toFixed(2)} kΩ</strong><br />
-          Quality: <strong>{impedance < 100 ? "Excellent" : impedance < 200 ? "Good" : "Insufficient"}</strong>
-        </p>
+        <>
+          <p style={{ marginTop: "1rem", color: impedance < 200 ? "green" : "red" }}>
+            Impedance: <strong>{(impedance / 1000).toFixed(2)} kΩ</strong><br />
+            Quality: <strong>{impedanceQuality(impedance)}</strong>
+          </p>
+          <div style={{ width: "80%", margin: "0 auto" }}>
+            <Line data={impedanceChartData} />
+          </div>
+        </>
       )}
 
       <div style={{ marginTop: "1rem" }}>
