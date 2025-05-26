@@ -26,31 +26,37 @@ const EarScan = () => {
   const eegData = useRef<{ timestamp: number; value: number }[]>([]);
   const pollInterval = useRef<NodeJS.Timeout | null>(null);
 
-  const connectToDevice = async () => {
-    try {
-      const device = await navigator.bluetooth.requestDevice({
-        filters: [{ name: "IGEB" }],
-        optionalServices: [EEG_SERVICE],
-      });
+const connectToDevice = async () => {
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: "IGEB" }],
+      optionalServices: [EEG_SERVICE],
+    });
 
-      const server = await device.gatt!.connect();
-      const service = await server.getPrimaryService(EEG_SERVICE);
-      const characteristics = await service.getCharacteristics();
+    const server = await device.gatt!.connect();
+    const service = await server.getPrimaryService(EEG_SERVICE);
 
-      // Log all UUIDs to browser console
-      characteristics.forEach((c) => console.log("Characteristic UUID:", c.uuid));
+    // ⬇️ Insert this line here after getting characteristics
+    const characteristics = await service.getCharacteristics();
 
-      impedanceChar.current = characteristics[0];
-      eegChar.current = characteristics[1] || characteristics[0];
+    // ✅ Log all UUIDs in the console
+    characteristics.forEach((c) =>
+      console.log("Characteristic UUID:", c.uuid)
+    );
 
-      await impedanceChar.current.startNotifications();
-      impedanceChar.current.addEventListener("characteristicvaluechanged", handleImpedance);
+    // Temporary default assignments (will adjust once UUIDs are known)
+    impedanceChar.current = characteristics[0];
+    eegChar.current = characteristics[1] || characteristics[0];
 
-      setConnected(true);
-    } catch (error) {
-      console.error("Connection failed:", error);
-    }
-  };
+    await impedanceChar.current.startNotifications();
+    impedanceChar.current.addEventListener("characteristicvaluechanged", handleImpedance);
+
+    setConnected(true);
+  } catch (error) {
+    console.error("Connection failed:", error);
+  }
+};
+
 
   const handleImpedance = (event: Event) => {
     const val = (event.target as BluetoothRemoteGATTCharacteristic).value;
