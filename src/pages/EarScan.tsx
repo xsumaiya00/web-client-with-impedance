@@ -26,32 +26,30 @@ const EarScan = () => {
   const characteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
   const pollInterval = useRef<NodeJS.Timeout | null>(null);
 
-  const connectToDevice = async () => {
-    try {
-      const device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: [EEG_SERVICE],
-      });
+const connectToDevice = async () => {
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: "IGEB" }],
+      optionalServices: [EEG_SERVICE],
+    });
 
-      if (!device.name?.includes("IGEB")) {
-        alert("Selected device is not IGEB");
-        return;
-      }
+    const server = await device.gatt!.connect();
+    const service = await server.getPrimaryService(EEG_SERVICE);
+    const characteristics = await service.getCharacteristics();
+    console.log("Discovered characteristics:", characteristics);
 
-      const server = await device.gatt!.connect();
-      const service = await server.getPrimaryService(EEG_SERVICE);
-      const characteristics = await service.getCharacteristics();
-      console.log("Discovered characteristics:", characteristics);
+    const char = characteristics[0];
+    characteristicRef.current = char;
+    await char.startNotifications();
 
-      const char = characteristics[0]; // Assume first one is EEG/impedance
-      characteristicRef.current = char;
-      await char.startNotifications();
-      char.addEventListener("characteristicvaluechanged", handleImpedance);
-      setConnected(true);
-    } catch (error) {
-      console.error("Connection failed:", error);
-    }
-  };
+    char.removeEventListener("characteristicvaluechanged", handleImpedance); // avoid duplicates
+    char.addEventListener("characteristicvaluechanged", handleImpedance);
+    setConnected(true);
+  } catch (error) {
+    console.error("Connection failed:", error);
+  }
+};
+
 
   const handleImpedance = (event: Event) => {
     const val = (event.target as BluetoothRemoteGATTCharacteristic).value;
